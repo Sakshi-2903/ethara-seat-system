@@ -1,0 +1,13 @@
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+SQLAlchemy==2.0.52
+pydantic==2.13.4
+email-validator==2.3.0
+python-multipart==0.0.32
+Faker==40.36.0
+PyJWT>=2.7.0
+bcrypt>=4.0.0
+
+# Optional: only needed if you enable the LLM-assisted AI assistant path
+# (set ANTHROPIC_API_KEY in the environment to activate it)
+# anthropic

@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-ink: #14171f;
+  --color-ink-soft: #1f2430;
+  --color-paper: #f7f5f1;
+  --color-paper-dim: #edeae2;
+  --color-slate: #4b5563;
+  --color-slate-light: #8b8f99;
+  --color-border: #e4e1da;
+  --color-signal: #e2a83d;
+  --color-signal-dark: #b8842a;
+  --color-ok: #3e8e5b;
+  --color-ok-bg: #e7f2ea;
+  --color-warn: #d65c4f;
+  --color-warn-bg: #fbe9e7;
+  --color-hold: #6b7fd7;
+  --color-hold-bg: #eaedfb;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  * {
+    border-color: var(--color-border);
+  }
+}
+
+@layer utilities {
+  .font-display { font-family: var(--font-display); }
+  .font-mono { font-family: var(--font-mono); }
+
+  .seat-tag {
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+  }
+
+  .card {
+    background: white;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+}
