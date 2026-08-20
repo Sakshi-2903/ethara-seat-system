@@ -1,6 +1,8 @@
 import { getToken, clearStoredAuth } from "./auth.jsx";
 
-const BASE = "/api";
+// In local dev, requests go to "/api" and Vite's proxy forwards them to
+// localhost:8000. In production, VITE_API_URL points at the deployed backend.
+const BASE = import.meta.env.VITE_API_URL || "/api";
 
 async function request(path, options = {}) {
   const token = getToken();
