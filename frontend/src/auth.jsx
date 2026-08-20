@@ -4,6 +4,13 @@ const AuthContext = createContext(null);
 
 const STORAGE_KEY = "ethara_auth";
 
+// Same BASE logic as api.js — in dev this is "/api" (proxied by Vite to
+// localhost:8000); in production, VITE_API_URL points at the deployed
+// backend directly. This file used to hardcode "/api/auth/login" here,
+// bypassing that logic entirely — that was the actual bug behind login
+// always 404ing in production even once everything else worked correctly.
+const BASE = import.meta.env.VITE_API_URL || "/api";
+
 function loadStoredAuth() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -17,7 +24,7 @@ export function AuthProvider({ children }) {
   const [auth, setAuth] = useState(loadStoredAuth);
 
   const login = useCallback(async (username, password) => {
-    const res = await fetch("/api/auth/login", {
+    const res = await fetch(`${BASE}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
