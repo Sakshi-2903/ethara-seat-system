@@ -173,34 +173,63 @@ seat" instead.
 This assistant's build environment has no network access to hosting platforms, so it cannot spin
 up a live URL directly — the steps below are what to run to deploy each half.
 
-### Backend (Railway or Render)
+**Actual deployment used for this project**, and why: backend on **Railway**, database on
+**Render's** managed Postgres (not Railway's own Postgres), frontend on **Vercel**. All three
+platforms are on the assessment's approved list (Section 4/11). The database ended up split from
+the backend's hosting platform because Railway's Postgres, when accessed via its public TCP proxy
+from outside Railway's network (needed for a one-time local seeding step), reliably hung partway
+through a bulk write — see `AI_PROMPTS.md` ("Prompt 11 — Deployment & Debugging") for the full
+investigation. Render's external Postgres URL doesn't have this issue, so the database moved
+there; the backend still runs on Railway and connects to Render's database over its public URL.
 
-1. Push the `backend/` folder to a GitHub repo (or the whole project, with Railway/Render's root
-   directory set to `backend/`).
-2. Create a new Web Service, connect the repo.
-3. Add a managed PostgreSQL database on the same platform and copy its connection string into a
-   `DATABASE_URL` environment variable on the web service.
-4. Set the start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-5. Set the build command: `pip install -r requirements.txt`
-6. After the first deploy, run `python3 seed.py` once (via a one-off shell/job on the platform) to
-   populate sample data — or write your own seed data if you'd rather not use the generated demo
-   set.
-7. Note the resulting public URL — that's your **live backend URL**.
+### Backend (Railway)
 
-### Frontend (Vercel or Netlify)
+1. Push the `backend/` folder to a GitHub repo (with the repo's root containing both `backend/`
+   and `frontend/`, and Railway's **Root Directory** setting for this service set to `backend`).
+2. Create a new Railway service, connect the repo.
+3. In **Settings → Build**, set the Build Command: `pip install -r requirements.txt`
+4. In **Settings → Deploy**, set the Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. In **Variables**, set:
+   - `DATABASE_URL` — a Postgres connection string (see "Database" below)
+   - `JWT_SECRET_KEY` — any long random string (signs login tokens; don't leave this unset)
+6. In **Settings → Networking → Public Networking**, click **Generate Domain** — this is your
+   **live backend URL**.
+7. Seed the database once (see "Seeding" below).
 
-1. Push the `frontend/` folder to the same or a separate repo.
-2. Create a new project, root directory `frontend/`.
-3. Build command: `npm run build`, output directory: `dist`.
-4. Set `VITE_API_URL` to your live backend URL from the step above (and update `src/api.js` to
-   read from it, as noted above).
-5. Deploy — note the resulting public URL as your **live frontend URL**.
+### Database (Render Postgres)
+
+1. On Render, **New +** → **PostgreSQL**, free tier, any region.
+2. Once created, copy the **External Database URL** — this is what both your own laptop (for
+   seeding) and your Railway-hosted backend (for normal operation) will use, since they're on
+   different platforms/networks and only the external URL is reachable from outside Render.
+3. Set this as `DATABASE_URL` on the Railway backend service (Step 5 above).
+
+### Seeding
+
+From your own machine, with the backend's Python virtual environment active:
+```powershell
+cd backend
+$env:DATABASE_URL="<paste the Render External Database URL>"
+python seed.py
+```
+This runs once against the live database and populates it with the full sample dataset (Section 6
+minimums) plus the three demo login accounts. `seed.py` uses chunked bulk inserts with progress
+output specifically so this is safe to run against a remote database — see `AI_PROMPTS.md` for why
+that mattered here.
+
+### Frontend (Vercel)
+
+1. Push the `frontend/` folder (same repo, root directory `frontend/`).
+2. New Project on Vercel, import the repo, root directory `frontend`.
+3. Build Command: `npm run build`, Output Directory: `dist`.
+4. Environment variable: `VITE_API_URL` = your Railway backend URL from above.
+5. Deploy — the resulting URL is your **live frontend URL**.
 
 ### CORS
 
 `backend/app/main.py` currently allows all origins (`allow_origins=["*"]`) for ease of local
 development and demoing. Before sharing a real deployment, narrow this to your deployed frontend's
-exact origin.
+exact Vercel origin.
 
 ## Submission checklist mapping
 

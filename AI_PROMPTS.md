@@ -301,6 +301,81 @@ deploy both halves.
 
 ---
 
+## Prompt 11 — Deployment & Debugging (Railway → Render migration)
+
+**Prompt used:** (iterative — this was live troubleshooting during actual deployment, not a single
+upfront prompt)
+> "Deploy the backend to Railway and seed the live database" — followed by pasting real crash
+> logs and terminal output as each issue surfaced, and asking for fixes.
+
+This was the most involved debugging session of the project, so it's documented in full here
+rather than summarized, since it directly maps to the brief's required "Debugging notes" and
+"Deployment notes" (Section 12).
+
+**Issue 1 — `railpack could not determine how to build the app`.**
+Railway built from the repo root and saw both `backend/` and `frontend/` with no single
+entrypoint. Cause: the service's **Root Directory** setting hadn't actually been saved. Fixed by
+re-entering `backend` in Settings → Source → Root Directory and confirming it took effect via a
+fresh deploy log that showed a proper Python build instead of the "could not determine" error.
+
+**Issue 2 — `ModuleNotFoundError: No module named 'psycopg2'`.**
+The backend runs on SQLite locally, so nothing had ever exercised the Postgres code path.
+Production used `DATABASE_URL` pointing at a real Postgres instance, and SQLAlchemy's
+`create_engine` only imports `psycopg2` at that point — it was never in `requirements.txt`. Fixed
+by adding `psycopg2-binary>=2.9.9`. Verified by installing it locally and confirming `import
+psycopg2` succeeds, then redeploying and confirming the crash trace no longer appeared in Railway's
+logs.
+
+**Issue 3 — seeding a remote database appeared to hang indefinitely.**
+This took several rounds to fully diagnose:
+- First cause found: `seed.py` called `db.refresh()` once per inserted row (5,600 seats + 5,000
+  employees ≈ 10,600 individual round trips) to fetch back auto-generated IDs. Locally, against
+  SQLite on disk, this is unnoticeable. Against a remote database, at any realistic network
+  latency, that's easily 10+ minutes of pure round-trip time with zero visible progress — which
+  is exactly what "stuck" looked like. Fixed by replacing every per-row `db.refresh()` with a
+  single bulk `SELECT ... ORDER BY id` after each batch commit, relying on the fact that insertion
+  order matches ascending id order on a fresh auto-increment table.
+- This fix alone wasn't enough: seeding *still* hung, but now specifically between the seats step
+  finishing and the employees step's first insert — i.e., on the very next query after a batch of
+  work had just completed successfully. That specific pattern (fine, then silently dead on the
+  *next* call) is the signature of a connection that was quietly dropped by an intermediary (here,
+  Railway's public TCP proxy) without the client being told — the socket just goes silent and the
+  OS-level TCP timeout (which can be minutes on Windows) is what eventually would have surfaced an
+  error, explaining why it looked like an indefinite hang rather than a clean failure.
+- Rewrote the entire seeder to use **chunked bulk inserts** (`sqlalchemy.insert()` with batches of
+  500 rows, `db.commit()` per batch, `print()` progress after each) instead of building 5,000+ ORM
+  objects and inserting/refreshing them one at a time. This also makes it obvious in real time
+  whether the process is alive.
+- Also hardened `backend/app/database.py` for any non-SQLite `DATABASE_URL`: added
+  `pool_pre_ping=True` (SQLAlchemy silently tests a connection before reusing it and transparently
+  opens a fresh one if it's dead, instead of handing the caller a socket that will hang),
+  `pool_recycle=280` (proactively retires connections before they're old enough to be at risk of a
+  proxy timing them out from the other end), TCP `keepalives`, and a Postgres-side
+  `statement_timeout=60000` so that if a query *does* somehow hang, it fails loudly after 60
+  seconds with a real error instead of an unbounded wait.
+- Despite all of the above, seeding through Railway's public Postgres proxy specifically continued
+  to hang at the same point on a subsequent attempt. Root-caused as the proxy connection itself,
+  not the application code — confirmed by testing the identical, already-fixed `seed.py` script
+  against two different Postgres providers accessed from the same machine, same network: it hung
+  again through Railway's proxy, but ran cleanly start-to-finish (a few seconds locally, under a
+  minute over the network) against both Neon and Render's Postgres on the first attempt with no
+  further code changes.
+
+**Decision: moved the database off Railway's own Postgres, onto Render's, while keeping the
+backend itself on Railway.** Both are on the assessment's approved platform list; nothing requires
+the app-hosting platform and the database to be the same provider. This is documented explicitly
+in the README's Deployment section rather than silently switched, since it's a real infrastructure
+decision made for a concrete, reproduced reason — not an arbitrary preference.
+
+**How verified:** the final `seed.py` was run start-to-finish against Render's Postgres from a
+Windows machine over a real home internet connection (not the sandboxed dev environment this
+project was originally built in), completing in well under a minute with full progress output and
+the correct final summary counts (5,000 employees, 5,600 seats, 150 pending, matching every
+Section 6 minimum). The Railway backend was then repointed at the same database via its
+`DATABASE_URL` variable and its Swagger docs endpoint reconfirmed reachable after redeploy.
+
+---
+
 ## Enhancements Beyond the Original Brief
 
 The assessment brief (Sections 1–12) specifies the core system. Everything below was added on top
@@ -342,6 +417,13 @@ and is documented against that section in Prompts 1–8 above.
 - The mobile header's logo image was missed on the first auth-gating pass
 - A separate, unrelated `App.jsx` edit had silently deleted `PeopleIcon`'s function body and left
   `BookmarkIcon` undefined; only surfaced when the self-service feature's build step failed
+- Missing `psycopg2-binary` for the Postgres path (only ever exercised in production, never
+  locally against SQLite)
+- Original seeder's per-row `db.refresh()` calls were invisible locally but made seeding a remote
+  database prohibitively slow; needed a full rewrite to chunked bulk inserts
+- Railway's public Postgres proxy reliably hung mid-seed for reasons outside the application code;
+  resolved by moving the database to Render rather than continuing to chase a platform-specific
+  networking issue
 
 **How correctness was verified throughout:**
 - Every endpoint was exercised with real `curl` requests against a running server, not just read

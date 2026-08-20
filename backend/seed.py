@@ -10,6 +10,11 @@ Meets Section 6 requirements:
   - At least 100 reserved seats
   - At least 50 employees pending allocation
 
+Uses chunked bulk inserts (not one-row-at-a-time ORM adds) so this runs
+quickly even against a remote database with real network latency, and
+prints progress as it goes so it's obvious it's still working rather than
+looking "stuck."
+
 Run with: python seed.py
 """
 import random
@@ -20,6 +25,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from faker import Faker
+from sqlalchemy import insert
 from app.database import Base, engine, SessionLocal
 from app import models, auth
 
@@ -38,9 +44,8 @@ ROLES = ["Software Engineer", "Senior Engineer", "Analyst", "Manager", "Associat
 NUM_EMPLOYEES = 5000
 FLOORS = list(range(1, 6))  # 5 floors
 ZONES = [chr(65 + i) for i in range(10)]  # Zones A-J (10 zones)
-SEATS_PER_FLOOR_ZONE = 11  # 5 floors * 10 zones * 11 = 550/floor*zone-combo -> total 5*10*11=550... adjust below
-
 TOTAL_SEATS_TARGET = 5600  # comfortably above the 5,500 minimum
+CHUNK = 500  # rows per batch — keeps each network round trip small
 
 
 def reset_db():
@@ -49,56 +54,52 @@ def reset_db():
     Base.metadata.create_all(bind=engine)
 
 
+def re_slug(name: str) -> str:
+    return "".join(c.lower() if c.isalnum() else "." for c in name).strip(".").replace("..", ".")
+
+
 def seed_projects(db):
     print(f"Creating {len(PROJECT_NAMES)} projects...")
-    projects = []
-    for name in PROJECT_NAMES:
-        p = models.Project(
-            name=name,
-            description=f"{name} product engineering initiative",
-            manager_name=fake.name(),
-            status=models.ProjectStatus.active,
-        )
-        db.add(p)
-        projects.append(p)
+    rows = [
+        {
+            "name": name,
+            "description": f"{name} product engineering initiative",
+            "manager_name": fake.name(),
+            "status": models.ProjectStatus.active,
+        }
+        for name in PROJECT_NAMES
+    ]
+    db.execute(insert(models.Project), rows)
     db.commit()
-    for p in projects:
-        db.refresh(p)
-    return projects
+    return db.query(models.Project).order_by(models.Project.id).all()
 
 
 def seed_seats(db):
     print("Creating seats...")
-    seats = []
-    seat_counter_per_floor_zone = {}
-
-    # Distribute seats across floors/zones until we reach the target total
     combos = [(f, z) for f in FLOORS for z in ZONES]
-    seats_per_combo = TOTAL_SEATS_TARGET // len(combos)  # base count
+    seats_per_combo = TOTAL_SEATS_TARGET // len(combos)
     remainder = TOTAL_SEATS_TARGET - seats_per_combo * len(combos)
-
     bays = ["1", "2", "3", "4", "5"]
 
-    seat_number_global = 0
+    rows = []
     for idx, (floor, zone) in enumerate(combos):
         count = seats_per_combo + (1 if idx < remainder else 0)
         for i in range(1, count + 1):
-            bay = bays[(i - 1) % len(bays)]
-            seat_number = f"{i:03d}"
-            seat = models.Seat(
-                floor=floor,
-                zone=zone,
-                bay=bay,
-                seat_number=seat_number,
-                status=models.SeatStatus.available,
-            )
-            db.add(seat)
-            seats.append(seat)
-            seat_number_global += 1
+            rows.append({
+                "floor": floor,
+                "zone": zone,
+                "bay": bays[(i - 1) % len(bays)],
+                "seat_number": f"{i:03d}",
+                "status": models.SeatStatus.available,
+            })
 
-    db.commit()
-    for s in seats:
-        db.refresh(s)
+    for start in range(0, len(rows), CHUNK):
+        chunk = rows[start:start + CHUNK]
+        db.execute(insert(models.Seat), chunk)
+        db.commit()
+        print(f"  ...{min(start + CHUNK, len(rows))}/{len(rows)} seats inserted")
+
+    seats = db.query(models.Seat).order_by(models.Seat.id).all()
     print(f"Created {len(seats)} seats across {len(FLOORS)} floors and {len(ZONES)} zones.")
     return seats
 
@@ -106,31 +107,37 @@ def seed_seats(db):
 def seed_employees_and_allocations(db, projects, seats):
     print(f"Creating {NUM_EMPLOYEES} employees and allocating seats...")
 
-    # Reserve at least 120 seats and put ~30 into maintenance, leave 550+ available
+    # Pick 120 seats to mark reserved and 30 to mark maintenance (bulk UPDATE,
+    # not per-object mutation + commit).
     random.shuffle(seats)
-    reserved_seats = seats[:120]
-    maintenance_seats = seats[120:150]
-    for s in reserved_seats:
-        s.status = models.SeatStatus.reserved
-    for s in maintenance_seats:
-        s.status = models.SeatStatus.maintenance
-    db.add_all(reserved_seats + maintenance_seats)
+    reserved_ids = [s.id for s in seats[:120]]
+    maintenance_ids = [s.id for s in seats[120:150]]
+
+    if reserved_ids:
+        db.execute(
+            models.Seat.__table__.update()
+            .where(models.Seat.id.in_(reserved_ids))
+            .values(status=models.SeatStatus.reserved)
+        )
+    if maintenance_ids:
+        db.execute(
+            models.Seat.__table__.update()
+            .where(models.Seat.id.in_(maintenance_ids))
+            .values(status=models.SeatStatus.maintenance)
+        )
     db.commit()
 
-    allocatable_seats = [s for s in seats if s.status == models.SeatStatus.available]
+    reserved_or_maintenance = set(reserved_ids) | set(maintenance_ids)
+    allocatable_seats = [s for s in seats if s.id not in reserved_or_maintenance]
 
-    # Reserve 600 seats to stay empty (available) so we comfortably clear the
-    # "at least 500 available seats" requirement after allocations.
+    # Keep 600 seats free so "available seats" comfortably clears the minimum.
     random.shuffle(allocatable_seats)
-    seats_to_keep_free = allocatable_seats[:600]
     seats_for_allocation = allocatable_seats[600:]
 
-    free_seat_ids = {s.id for s in seats_to_keep_free}
-    seat_pointer = 0
-
     used_emails = set()
-    employees = []
-    pending_target = 60  # comfortably above the 50 minimum
+    employee_rows = []
+    meta = []  # (project, is_pending) per row, same order as employee_rows
+    pending_target = 60
 
     for i in range(NUM_EMPLOYEES):
         name = fake.name()
@@ -144,55 +151,81 @@ def seed_employees_and_allocations(db, projects, seats):
 
         joining_date = fake.date_between(start_date="-3y", end_date="today")
         project = random.choice(projects)
+        is_pending = i < pending_target
 
-        is_pending = i < pending_target  # first N employees are new joiners pending allocation
+        employee_rows.append({
+            "employee_code": f"ETH{i+10001}",
+            "name": name,
+            "email": email,
+            "department": random.choice(DEPARTMENTS),
+            "role": random.choice(ROLES),
+            "joining_date": joining_date,
+            "status": models.EmploymentStatus.pending_allocation if is_pending else models.EmploymentStatus.active,
+            "project_id": project.id,
+        })
+        meta.append((project, is_pending))
 
-        employee = models.Employee(
-            employee_code=f"ETH{i+10001}",
-            name=name,
-            email=email,
-            department=random.choice(DEPARTMENTS),
-            role=random.choice(ROLES),
-            joining_date=joining_date,
-            status=models.EmploymentStatus.pending_allocation if is_pending else models.EmploymentStatus.active,
-            project_id=project.id,
-        )
-        db.add(employee)
-        employees.append((employee, project, is_pending))
+    print("Inserting employees...")
+    for start in range(0, len(employee_rows), CHUNK):
+        chunk = employee_rows[start:start + CHUNK]
+        db.execute(insert(models.Employee), chunk)
+        db.commit()
+        print(f"  ...{min(start + CHUNK, len(employee_rows))}/{len(employee_rows)} employees inserted")
 
-    db.commit()
-    for employee, _, _ in employees:
-        db.refresh(employee)
+    # Bulk re-query once — insertion order matches ascending id order for a
+    # fresh auto-increment table, so this preserves the pairing with `meta`.
+    refreshed = db.query(models.Employee).order_by(models.Employee.id).all()
+    employees = [(emp, project, is_pending) for emp, (project, is_pending) in zip(refreshed, meta)]
 
     print("Allocating seats to active employees...")
-    allocations = []
+    seat_pointer = 0
+    allocation_rows = []
+    seat_ids_to_occupy = []
+    employee_ids_left_pending = []
+
     for employee, project, is_pending in employees:
         if is_pending:
             continue
         if seat_pointer >= len(seats_for_allocation):
-            # Ran out of allocatable seats; leave remaining employees pending
-            employee.status = models.EmploymentStatus.pending_allocation
-            db.add(employee)
+            employee_ids_left_pending.append(employee.id)
             continue
-
         seat = seats_for_allocation[seat_pointer]
         seat_pointer += 1
-        seat.status = models.SeatStatus.occupied
-        db.add(seat)
+        seat_ids_to_occupy.append(seat.id)
+        allocation_rows.append({
+            "employee_id": employee.id,
+            "seat_id": seat.id,
+            "project_id": project.id,
+            "allocation_status": models.AllocationStatus.active,
+            "allocation_date": datetime.datetime.combine(employee.joining_date, datetime.time(9, 0)),
+        })
 
-        allocation = models.SeatAllocation(
-            employee_id=employee.id,
-            seat_id=seat.id,
-            project_id=project.id,
-            allocation_status=models.AllocationStatus.active,
-            allocation_date=datetime.datetime.combine(employee.joining_date, datetime.time(9, 0)),
+    for start in range(0, len(allocation_rows), CHUNK):
+        chunk = allocation_rows[start:start + CHUNK]
+        db.execute(insert(models.SeatAllocation), chunk)
+        db.commit()
+        print(f"  ...{min(start + CHUNK, len(allocation_rows))}/{len(allocation_rows)} allocations created")
+
+    for start in range(0, len(seat_ids_to_occupy), CHUNK):
+        chunk_ids = seat_ids_to_occupy[start:start + CHUNK]
+        db.execute(
+            models.Seat.__table__.update()
+            .where(models.Seat.id.in_(chunk_ids))
+            .values(status=models.SeatStatus.occupied)
         )
-        allocations.append(allocation)
-
-    db.add_all(allocations)
     db.commit()
-    print(f"Allocated seats to {len(allocations)} employees.")
-    print(f"{sum(1 for _, _, p in employees if p)} employees left pending allocation (new joiners).")
+
+    if employee_ids_left_pending:
+        db.execute(
+            models.Employee.__table__.update()
+            .where(models.Employee.id.in_(employee_ids_left_pending))
+            .values(status=models.EmploymentStatus.pending_allocation)
+        )
+        db.commit()
+
+    total_pending = sum(1 for _, _, p in employees if p) + len(employee_ids_left_pending)
+    print(f"Allocated seats to {len(allocation_rows)} employees.")
+    print(f"{total_pending} employees left pending allocation (new joiners).")
 
 
 def seed_users(db, sample_employee):
@@ -203,19 +236,18 @@ def seed_users(db, sample_employee):
         ("employee", "employee123", models.UserRole.employee,
          sample_employee.id if sample_employee else None),
     ]
-    for username, password, role, employee_id in demo_accounts:
-        db.add(models.User(
-            username=username,
-            password_hash=auth.hash_password(password),
-            role=role,
-            employee_id=employee_id,
-        ))
+    rows = [
+        {
+            "username": username,
+            "password_hash": auth.hash_password(password),
+            "role": role,
+            "employee_id": employee_id,
+        }
+        for username, password, role, employee_id in demo_accounts
+    ]
+    db.execute(insert(models.User), rows)
     db.commit()
     print("Demo accounts: admin/admin123, hr/hr123, employee/employee123")
-
-
-def re_slug(name: str) -> str:
-    return "".join(c.lower() if c.isalnum() else "." for c in name).strip(".").replace("..", ".")
 
 
 def print_summary(db):
@@ -254,8 +286,6 @@ if __name__ == "__main__":
         seats = seed_seats(db)
         seed_employees_and_allocations(db, projects, seats)
 
-        # Pick an already-seated employee so the demo "employee" account
-        # has an interesting seat/project to query via 'Where is my seat?'
         sample_employee = (
             db.query(models.Employee)
             .filter(models.Employee.status == models.EmploymentStatus.active)
