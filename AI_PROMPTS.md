@@ -490,7 +490,36 @@ asked for vs. what was extended:
 
 ---
 
-## Enhancements Beyond the Original Brief
+## Prompt 14 — Simplify to Two Roles (Drop HR)
+
+**Prompt used:**
+> "2 roles: admin and employee." (in response to reviewing the Features list, which still
+> described Admin/HR/Employee)
+
+**What AI generated correctly:** Removed the `hr` role from the system end to end rather than just
+hiding it from the UI — `models.UserRole` enum now only has `admin` and `employee`; every
+permission check that previously read `role in ("admin", "hr")` (in `auth.py`, `seats.py`, and the
+AI assistant's named-booking intent) was simplified to a plain `role == "admin"` check; `seed.py`
+no longer creates an `hr` demo account; and the frontend's `ROLE_LABEL` map and `canWrite` check
+were both updated to match. This was a deliberate choice over just not *showing* an `hr` login
+option: since Admin and HR had identical permissions in this app, keeping a redundant role around
+would have been dead weight in the schema and permission logic for no real benefit, and "two roles"
+was explicit in the request.
+
+**What AI generated incorrectly:** Nothing — this was a mechanical simplification across a small,
+well-contained set of files (verified by grepping for every `hr` reference across the codebase
+before considering it done, which caught one functional spot — the AI assistant's
+`_book_for_named_employee` permission check — that would have been easy to miss if only the more
+obvious `auth.py`/`seats.py` spots had been checked).
+
+**How verified:** Re-ran `seed.py` from scratch and confirmed logging in as `hr`/`hr123` now
+correctly fails with "Incorrect username or password," while `admin`/`admin123` and
+`employee`/`employee123` both still work. Re-ran `npm run build` to confirm the frontend change
+didn't break anything.
+
+---
+
+
 
 The assessment brief (Sections 1–12) specifies the core system. Everything below was added on top
 of that spec, at the candidate's request, and is called out separately here so it's clear what was
@@ -498,7 +527,7 @@ asked for vs. what was extended:
 
 | Enhancement | Brief coverage |
 |---|---|
-| **JWT login with Admin / HR / Employee roles** | Not required — Section 12's checklist only lists "Sample login credentials **if** authentication is added" as optional |
+| **JWT login with Admin / Employee roles** | Not required — Section 12's checklist only lists "Sample login credentials **if** authentication is added" as optional |
 | **Ownership-scoped self-service** (employees book/release their *own* seat) | Not mentioned — the brief's seat allocation flow (3.4) is written from an HR/Admin perspective only |
 | **AI assistant can *act*, not just answer** ("book me a seat" / "release my seat") | Section 3.7 only asks the assistant to *answer* queries about seats/projects — performing the allocation itself is new |
 | **Company logo / branded UI, incl. a subtle background watermark** | Not specified — the brief only asks for "simple responsive UI" (Section 4) |

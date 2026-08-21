@@ -23,15 +23,14 @@ ethara-seat-system/
 - **Search & filter** — by name, employee ID, email, project, floor, zone, seat status
 - **Dashboard** — total employees/seats, occupied/available/reserved counts, project-wise and
   floor-wise utilization, pending-allocation count
-- **Authentication & roles** — JWT login with three roles: **Admin** and **HR** have full
-  read/write access (create/update employees, allocate/release seats); **Employee** accounts are
-  read-only for other people's data (search, dashboard, AI assistant, own record) and can't reach
-  the New Joiner flow or release someone else's seat. The login screen surfaces Admin and Employee
-  as one-click demo accounts (the `hr` account still works — it's just not shown as a shortcut,
-  since Admin and HR have identical permissions in this app), includes a password visibility
-  toggle and a "Forgot password?" note (this is a demo app with no email infrastructure, so it
-  explains that rather than faking a reset flow), and carries a subtle branded background
-  watermark through to the rest of the app after signing in
+- **Authentication & roles** — JWT login with two roles: **Admin** has full read/write access
+  (create/update employees, allocate/release seats, book seats on anyone's behalf); **Employee**
+  accounts are read-only for other people's data (search, dashboard, AI assistant, own record),
+  can't reach the New Joiner flow, and can only book/release **their own** seat. The login screen
+  includes one-click demo accounts, a password visibility toggle, a "Forgot password?" note (this
+  is a demo app with no email infrastructure, so it explains that rather than faking a reset
+  flow), and carries a subtle branded background watermark through to the rest of the app after
+  signing in
 - **Self-service seat booking ("My Seat")** — any logged-in user linked to an employee record
   (typically Employee-role accounts) can book an available seat for themselves or release the one
   they're in, from a dedicated page or via the AI assistant ("book me a seat", "release my seat").
@@ -64,8 +63,7 @@ ethara-seat-system/
 | Role | Username | Password | Access |
 |---|---|---|---|
 | Admin | `admin` | `admin123` | Full read/write |
-| HR | `hr` | `hr123` | Full read/write |
-| Employee | `employee` | `employee123` | Read-only (linked to a real seated employee) |
+| Employee | `employee` | `employee123` | Read-only (linked to a real seated employee), plus self-service booking |
 
 ## Running locally
 
@@ -152,7 +150,7 @@ curl -X POST http://localhost:8000/ai/query \
   -d '{"query": "Release my seat"}'
 ```
 
-Admin/HR accounts can additionally book on someone else's behalf via `"book a seat for <Name>"` —
+Admin accounts can additionally book on someone else's behalf via `"book a seat for <Name>"` —
 Employee accounts attempting the same phrasing get a polite refusal pointing them to "book me a
 seat" instead.
 
@@ -171,7 +169,7 @@ seat" instead.
   `POST /seats/release` for themselves only. The API resolves "who" from the JWT
   (`current_user.employee_id`), not from any employee_id the client sends — an Employee account
   passing someone else's `employee_id`, or a `seat_id` belonging to someone else's active
-  allocation, gets a 403. Admin/HR accounts are unrestricted (see `backend/app/routers/seats.py`).
+  allocation, gets a 403. Admin accounts are unrestricted (see `backend/app/routers/seats.py`).
 
 ## Deployment
 
