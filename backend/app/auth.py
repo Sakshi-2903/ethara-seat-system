@@ -2,12 +2,12 @@
 Authentication for the Ethara Seat Allocation System.
 
 Simple JWT-based login with three roles:
-  - admin / hr : full read-write access (create/update employees, allocate/release seats)
+  - admin      : full read-write access (create/update employees, allocate/release seats)
   - employee   : read-only access (search, dashboard, AI assistant, own record)
 
 Demo credentials are created by seed.py:
   admin / admin123
-  hr / hr123
+  (no other roles)
   employee / employee123
 """
 import os
@@ -83,11 +83,11 @@ def get_current_user(
 
 
 def require_write_access(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-    """Only admin/hr can create, update, allocate, or release."""
-    if current_user.role not in ("admin", "hr"):
+    """Only admin can create, update, allocate, or release on someone else's behalf."""
+    if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Admin or HR accounts can perform this action.",
+            detail="Only Admin accounts can perform this action.",
         )
     return current_user
 
@@ -100,11 +100,11 @@ def require_admin(current_user: CurrentUser = Depends(get_current_user)) -> Curr
 
 def assert_self_or_privileged(current_user: CurrentUser, target_employee_id: Optional[int]) -> None:
     """
-    Allows admin/hr to act on any employee_id. Allows an 'employee' role account to act
+    Allows admin to act on any employee_id. Allows an 'employee' role account to act
     only on its own linked employee_id (self-service seat booking/release). Anything else
     is rejected with a 403.
     """
-    if current_user.role in ("admin", "hr"):
+    if current_user.role == "admin":
         return
     if current_user.role == "employee":
         if current_user.employee_id is None:

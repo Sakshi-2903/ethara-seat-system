@@ -232,7 +232,6 @@ def seed_users(db, sample_employee):
     print("Creating demo login accounts...")
     demo_accounts = [
         ("admin", "admin123", models.UserRole.admin, None),
-        ("hr", "hr123", models.UserRole.hr, None),
         ("employee", "employee123", models.UserRole.employee,
          sample_employee.id if sample_employee else None),
     ]
@@ -247,7 +246,7 @@ def seed_users(db, sample_employee):
     ]
     db.execute(insert(models.User), rows)
     db.commit()
-    print("Demo accounts: admin/admin123, hr/hr123, employee/employee123")
+    print("Demo accounts: admin/admin123, employee/employee123")
 
 
 def print_summary(db):

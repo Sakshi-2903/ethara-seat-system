@@ -73,20 +73,20 @@ def allocate(
     current_user: auth.CurrentUser = Depends(auth.get_current_user),
 ):
     """
-    Admin/HR can allocate a seat to any employee. Employees can only book a
+    Admin can allocate a seat to any employee. Employees can only book a
     seat for themselves — their own employee_id is used automatically, and
     if they pass someone else's employee_id it's rejected.
     """
     target_employee_id = payload.employee_id
 
-    if current_user.role in ("admin", "hr"):
+    if current_user.role == "admin":
         if not target_employee_id:
             raise HTTPException(status_code=400, detail="employee_id is required.")
     elif current_user.role == "employee":
         if not current_user.employee_id:
             raise HTTPException(
                 status_code=400,
-                detail="Your login isn't linked to an employee record, so you can't book a seat. Contact HR.",
+                detail="Your login isn't linked to an employee record, so you can't book a seat. Contact Admin.",
             )
         if target_employee_id and target_employee_id != current_user.employee_id:
             raise HTTPException(status_code=403, detail="You can only book a seat for yourself.")
@@ -113,14 +113,14 @@ def release(
     current_user: auth.CurrentUser = Depends(auth.get_current_user),
 ):
     """
-    Admin/HR can release any seat/employee's allocation. Employees can only
+    Admin can release any seat/employee's allocation. Employees can only
     release their own — attempting to target someone else's seat or
     employee_id is rejected.
     """
     employee_id = payload.employee_id
     seat_id = payload.seat_id
 
-    if current_user.role in ("admin", "hr"):
+    if current_user.role == "admin":
         pass  # unrestricted
     elif current_user.role == "employee":
         if not current_user.employee_id:

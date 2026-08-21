@@ -36,7 +36,6 @@ class AllocationStatus(str, enum.Enum):
 
 class UserRole(str, enum.Enum):
     admin = "admin"
-    hr = "hr"
     employee = "employee"
 
 
@@ -107,7 +106,7 @@ class SeatAllocation(Base):
 
 class User(Base):
     """
-    Login accounts for the system. Roles: admin / hr can create employees and
+    Login accounts for the system. Roles: admin can create employees and
     allocate/release seats; employee accounts are read-only (search, dashboard,
     AI assistant, and their own record) and optionally link to an Employee row
     so 'my seat' style queries can auto-fill their identity.

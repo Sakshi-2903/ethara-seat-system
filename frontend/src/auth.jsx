@@ -49,7 +49,7 @@ export function AuthProvider({ children }) {
     setAuth(null);
   }, []);
 
-  const canWrite = auth?.role === "admin" || auth?.role === "hr";
+  const canWrite = auth?.role === "admin";
 
   return (
     <AuthContext.Provider value={{ auth, login, logout, canWrite }}>

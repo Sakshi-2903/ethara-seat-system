@@ -9,7 +9,7 @@ import MySeat from "./pages/MySeat.jsx";
 import BackgroundWatermark from "./components/BackgroundWatermark.jsx";
 import { useAuth } from "./auth.jsx";
 
-const ROLE_LABEL = { admin: "Admin", hr: "HR", employee: "Employee" };
+const ROLE_LABEL = { admin: "Admin", employee: "Employee" };
 
 export default function App() {
   const { auth } = useAuth();

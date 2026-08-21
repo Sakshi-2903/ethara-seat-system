@@ -159,8 +159,8 @@ def _self_release_seat(db: Session, current_user) -> str:
 
 
 def _book_for_named_employee(db: Session, current_user, name: str) -> str:
-    if not current_user or current_user.role not in ("admin", "hr"):
-        return ("Only Admin or HR accounts can book a seat on someone else's behalf. "
+    if not current_user or current_user.role != "admin":
+        return ("Only Admin accounts can book a seat on someone else's behalf. "
                 "I can book one for you, though — just say 'book me a seat'.")
     employee = _find_employee(db, name=name)
     if not employee:
