@@ -6,6 +6,7 @@ import NewJoiner from "./pages/NewJoiner.jsx";
 import Assistant from "./pages/Assistant.jsx";
 import Login from "./pages/Login.jsx";
 import MySeat from "./pages/MySeat.jsx";
+import BackgroundWatermark from "./components/BackgroundWatermark.jsx";
 import { useAuth } from "./auth.jsx";
 
 const ROLE_LABEL = { admin: "Admin", hr: "HR", employee: "Employee" };
@@ -29,8 +30,8 @@ export default function App() {
   ];
 
   return (
-    <div className="flex h-full min-h-screen">
-      <aside className="hidden md:flex w-64 shrink-0 flex-col bg-ink text-paper">
+    <div className="flex min-h-screen">
+      <aside className="hidden md:flex w-64 shrink-0 flex-col bg-ink text-paper sticky top-0 h-screen overflow-y-auto">
         <div className="px-6 py-6 border-b border-white/10">
           <div className="flex items-center gap-2">
             <img src="/logo.png" alt="Ethara.AI" className="h-8 w-8 rounded-md object-contain bg-white" />
@@ -87,18 +88,21 @@ export default function App() {
           ))}
         </nav>
 
-        <main className="flex-1 bg-paper">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/my-seat" element={<MySeat />} />
-            <Route path="/directory" element={<Directory />} />
-            <Route path="/seats" element={<Seats />} />
-            <Route
-              path="/new-joiner"
-              element={auth.role === "employee" ? <Navigate to="/" replace /> : <NewJoiner />}
-            />
-            <Route path="/assistant" element={<Assistant />} />
-          </Routes>
+        <main className="flex-1 bg-paper relative">
+          <BackgroundWatermark opacity={0.035} />
+          <div className="relative">
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/my-seat" element={<MySeat />} />
+              <Route path="/directory" element={<Directory />} />
+              <Route path="/seats" element={<Seats />} />
+              <Route
+                path="/new-joiner"
+                element={auth.role === "employee" ? <Navigate to="/" replace /> : <NewJoiner />}
+              />
+              <Route path="/assistant" element={<Assistant />} />
+            </Routes>
+          </div>
         </main>
       </div>
     </div>
