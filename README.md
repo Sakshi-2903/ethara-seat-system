@@ -26,7 +26,12 @@ ethara-seat-system/
 - **Authentication & roles** — JWT login with three roles: **Admin** and **HR** have full
   read/write access (create/update employees, allocate/release seats); **Employee** accounts are
   read-only for other people's data (search, dashboard, AI assistant, own record) and can't reach
-  the New Joiner flow or release someone else's seat
+  the New Joiner flow or release someone else's seat. The login screen surfaces Admin and Employee
+  as one-click demo accounts (the `hr` account still works — it's just not shown as a shortcut,
+  since Admin and HR have identical permissions in this app), includes a password visibility
+  toggle and a "Forgot password?" note (this is a demo app with no email infrastructure, so it
+  explains that rather than faking a reset flow), and carries a subtle branded background
+  watermark through to the rest of the app after signing in
 - **Self-service seat booking ("My Seat")** — any logged-in user linked to an employee record
   (typically Employee-role accounts) can book an available seat for themselves or release the one
   they're in, from a dedicated page or via the AI assistant ("book me a seat", "release my seat").
@@ -174,13 +179,15 @@ This assistant's build environment has no network access to hosting platforms, s
 up a live URL directly — the steps below are what to run to deploy each half.
 
 **Actual deployment used for this project**, and why: backend on **Railway**, database on
-**Render's** managed Postgres (not Railway's own Postgres), frontend on **Vercel**. All three
-platforms are on the assessment's approved list (Section 4/11). The database ended up split from
-the backend's hosting platform because Railway's Postgres, when accessed via its public TCP proxy
-from outside Railway's network (needed for a one-time local seeding step), reliably hung partway
-through a bulk write — see `AI_PROMPTS.md` ("Prompt 11 — Deployment & Debugging") for the full
-investigation. Render's external Postgres URL doesn't have this issue, so the database moved
-there; the backend still runs on Railway and connects to Render's database over its public URL.
+**Render's** managed Postgres (not Railway's own Postgres), frontend on **Netlify** (moved there
+after Vercel intermittently failed to pick up a fresh production build — see `AI_PROMPTS.md`,
+"Prompt 12," for the full investigation). All three platforms are on the assessment's approved
+list (Section 4/11). The database ended up split from the backend's hosting platform because
+Railway's Postgres, when accessed via its public TCP proxy from outside Railway's network (needed
+for a one-time local seeding step), reliably hung partway through a bulk write — see
+`AI_PROMPTS.md` ("Prompt 11 — Deployment & Debugging") for that investigation. Render's external
+Postgres URL doesn't have this issue, so the database moved there; the backend still runs on
+Railway and connects to Render's database over its public URL.
 
 ### Backend (Railway)
 
@@ -217,19 +224,50 @@ minimums) plus the three demo login accounts. `seed.py` uses chunked bulk insert
 output specifically so this is safe to run against a remote database — see `AI_PROMPTS.md` for why
 that mattered here.
 
-### Frontend (Vercel)
+### Frontend (Netlify)
 
-1. Push the `frontend/` folder (same repo, root directory `frontend/`).
-2. New Project on Vercel, import the repo, root directory `frontend`.
-3. Build Command: `npm run build`, Output Directory: `dist`.
-4. Environment variable: `VITE_API_URL` = your Railway backend URL from above.
-5. Deploy — the resulting URL is your **live frontend URL**.
+1. Push the `frontend/` folder (same repo).
+2. New site on Netlify, import the repo.
+3. **Base directory**: `frontend`
+4. **Build command**: `npm run build`
+5. **Publish directory**: `dist` (relative to Base directory above — Netlify will show/resolve
+   this as `frontend/dist`; do **not** type `frontend/dist` yourself here, or it resolves to a
+   nonexistent `frontend/frontend/dist`).
+6. Leave **Package directory** and **Functions directory** empty.
+7. Environment variable: `VITE_API_URL` = your Railway backend URL from above (no trailing slash).
+8. Deploy — the resulting `*.netlify.app` URL is your **live frontend URL**.
+
+If you'd rather use Vercel: the same settings apply (Root Directory `frontend`, Build Command
+`npm run build`, Output Directory `dist`, same `VITE_API_URL` variable) — this project deployed
+cleanly on Vercel too once its environment variable and build-cache state were sorted out; Netlify
+was chosen here mainly to get an independent, freshly-configured environment while debugging (see
+`AI_PROMPTS.md`, Prompt 12), not because of any inherent Vercel limitation.
+
+**Important — every environment variable added *after* a platform's first build requires a
+genuinely fresh rebuild to take effect**, since Vite bakes `import.meta.env.*` values in at build
+time, not runtime. The most reliable way to force one is an empty commit:
+```powershell
+git commit --allow-empty -m "Trigger fresh build"
+git push
+```
+Relying on a platform's "Redeploy" button on an old build is not equivalent — it can serve a
+cached build that predates the variable.
 
 ### CORS
 
 `backend/app/main.py` currently allows all origins (`allow_origins=["*"]`) for ease of local
 development and demoing. Before sharing a real deployment, narrow this to your deployed frontend's
-exact Vercel origin.
+exact Netlify (or Vercel) origin.
+
+### A gotcha worth knowing if you touch API calls
+
+Every network request the frontend makes should go through the shared `request()` helper in
+`frontend/src/api.js` (which reads `VITE_API_URL`), **not** a standalone `fetch()` call written
+directly in a page or context file. `frontend/src/auth.jsx`'s login function briefly bypassed this
+with a hardcoded `/api/auth/login` path, which worked fine in local dev (where `/api` is proxied)
+but silently 404'd once deployed — every other page worked correctly the whole time, only login
+was affected, which made it a genuinely confusing bug to track down. See `AI_PROMPTS.md`, Prompt
+12, for the full story if you want the cautionary tale.
 
 ## Submission checklist mapping
 

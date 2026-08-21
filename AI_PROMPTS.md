@@ -376,6 +376,120 @@ Section 6 minimum). The Railway backend was then repointed at the same database 
 
 ---
 
+## Prompt 12 — Frontend Hosting: Vercel → Netlify, and the Real Root Cause Behind "Login Failed"
+
+**Prompt used:** (iterative — live troubleshooting of a production frontend deploy)
+
+This is the second major debugging saga of the project, and it's worth documenting in full because
+the actual bug was hiding behind several layers of red herrings that all looked like the same
+symptom.
+
+**What looked like the problem, in order:**
+1. Vercel's build initially cached an old build and never picked up the newly-added
+   `VITE_API_URL` environment variable — confirmed by inspecting the deployed bundle directly
+   (`view-source`, then DevTools → Sources) and finding it still resolved to the dev-only `/api`
+   fallback path. Fixed by forcing a fresh build via an empty git commit rather than relying on
+   Vercel's "Redeploy" button.
+2. The `VITE_API_URL` value itself turned out to have never actually saved on one attempt — the
+   field was showing Vercel's own placeholder text (`https://api.example.com`), not a real saved
+   value, despite appearing to have been typed in. Re-entered and confirmed via the field's reveal
+   icon before proceeding again.
+3. After several more redeploys and still-identical bundle hashes, switched to a diagnostic
+   approach instead of continuing to guess at platform UI state: built the frontend locally with
+   `VITE_API_URL` set as a real shell environment variable and inspected the compiled output
+   directly with `grep`. This confirmed the correct backend URL *was* being embedded in the bundle
+   — the build itself was fine.
+4. Given repeated inconsistent behavior on Vercel specifically, migrated the frontend deploy to
+   **Netlify** instead (both are on the assessment's approved platform list) to get a clean,
+   independently-configured environment and rule out anything platform-specific to Vercel. Netlify
+   also required fixing an initial `Base directory` / `Publish directory` misconfiguration (a
+   `frontend/frontend/dist` path mismatch from an auto-filled field) before its build succeeded.
+5. Even after a confirmed-correct Netlify build (verified again by `grep`-ing the actual bytes of
+   the deployed JS bundle in the browser for the backend URL, and finding it), **login specifically
+   still failed with a 404 to `/api/auth/login`**, while every other page's data loaded correctly.
+
+**The real root cause:** `frontend/src/auth.jsx`'s `login()` function had a **hardcoded**
+`fetch("/api/auth/login", ...)` call, written when the file was first created — before
+`VITE_API_URL` existed as a concept in the project — and it was never updated when `api.js` was
+later given the dynamic `BASE` logic. Every other page's requests go through `api.js`'s shared
+`request()` function, which *was* correctly fixed early on, so they worked in production the whole
+time. Only the login page's own separate, never-touched `fetch()` call was broken. This explains
+why the symptom was so confusing: the compiled bundle genuinely *did* contain the correct backend
+URL (proving the build/environment-variable pipeline had been fine for a while), while one specific
+user action continued to fail regardless — because that action's code path never looked at the
+variable at all.
+
+**Fix:** Added the same `const BASE = import.meta.env.VITE_API_URL || "/api"` line to `auth.jsx`
+and changed the hardcoded string to `` fetch(`${BASE}/auth/login`, ...) ``.
+
+**How verified:** Rebuilt locally with the real production `VITE_API_URL` value and confirmed via
+`grep` on the compiled bundle both that the URL was embedded *and* that it was the value that the
+`fetch()` call for login specifically now used (checked the literal minified variable reference,
+not just the string's presence anywhere in the file, since the string alone had already been
+proven present without fixing anything — the earlier debugging round's mistake was treating "URL
+appears somewhere in the bundle" as sufficient proof, when the real question was "is *this specific
+fetch call* using it"). After pushing, confirmed live login succeeded through the actual deployed
+site.
+
+**Lesson applied going forward:** when a symptom persists after a plausible root cause is fixed,
+re-derive from the actual network request/response rather than re-checking the same upstream
+configuration again — the DevTools Network tab's Request URL for the *specific failing call* was
+the fact that actually resolved this, not another look at environment variable dashboards.
+
+---
+
+## Prompt 13 — UI/UX Polish (Login Redesign, Sidebar Layout Fix, Brand Watermark)
+
+**Prompt used:**
+> "I didn't like how the frontend is looking — just have 2 demo users shown (admin/admin123,
+> employee/employee123), add a password show/hide toggle and a forgot-password link on login,
+> make the sidebar run the full length of the page instead of stopping short, and put the Ethara
+> logo subtly in the background throughout the app to make it feel more branded."
+
+**What AI generated correctly:**
+- **Login page**: trimmed the demo-account list from three to two (Admin, Employee) per request;
+  added a password field eye-icon toggle (`type="password"` ↔ `"text"`); added a "Forgot
+  password?" link that expands an inline explanatory note rather than pretending to offer a real
+  reset flow this app doesn't have (no email infrastructure exists, so a fake "email sent" message
+  would be misleading) — this was a deliberate scope decision, not an omission.
+- **Sidebar height**: root-caused as the sidebar relying on flexbox's default `align-items: stretch`
+  to match the main content's height, which is fragile once content height varies significantly.
+  Replaced with `sticky top-0 h-screen` — the sidebar now always spans exactly one viewport height
+  and stays pinned while the main content scrolls beneath it, which is both a correctness fix and
+  the more conventional pattern for an app shell like this.
+- **Brand watermark**: rather than tiling the source logo file directly (which has a solid white
+  background and would render as a visible grid of squares when repeated), processed it with
+  Pillow to strip the white background to transparency, shrink the mark, and center it on a larger
+  transparent tile — producing a sparse, evenly-spaced pattern instead of a dense grid. Built as a
+  reusable `BackgroundWatermark` component (opacity configurable per page) and added to both the
+  login screen and the main authenticated app shell.
+
+**What AI generated incorrectly / had to be corrected:**
+- A user-supplied paste of `App.jsx` for review (while manually copying pieces of an earlier
+  multi-part instruction) ended up with a duplicated `import { useAuth } from "./auth.jsx";` line,
+  which would have failed the build. Caught by inspection before it was pushed, and the entire file
+  was given back as one complete, verified-building block rather than another partial patch — the
+  same lesson from the earlier `App.jsx` merge-conflict incident in Prompt 9: once a file has gone
+  through several rounds of partial instructions, hand back the whole file rather than another diff.
+
+**How verified:** Ran `npm run build` after each change and confirmed a clean compile before
+handing files back; visually described the expected result (spacing, opacity, icon behavior) since
+this assistant's environment cannot render a browser screenshot, and relied on the user's own
+before/after screenshots during the sidebar-fix and logo-visibility follow-ups to confirm the
+actual rendered result matched intent — one follow-up (`logo.png` itself was missing from the
+deployed `public/` folder, distinct from the new watermark tile) was caught this way and fixed by
+providing the original logo file directly for download.
+
+---
+
+
+
+The assessment brief (Sections 1–12) specifies the core system. Everything below was added on top
+of that spec, at the candidate's request, and is called out separately here so it's clear what was
+asked for vs. what was extended:
+
+---
+
 ## Enhancements Beyond the Original Brief
 
 The assessment brief (Sections 1–12) specifies the core system. Everything below was added on top
@@ -387,8 +501,9 @@ asked for vs. what was extended:
 | **JWT login with Admin / HR / Employee roles** | Not required — Section 12's checklist only lists "Sample login credentials **if** authentication is added" as optional |
 | **Ownership-scoped self-service** (employees book/release their *own* seat) | Not mentioned — the brief's seat allocation flow (3.4) is written from an HR/Admin perspective only |
 | **AI assistant can *act*, not just answer** ("book me a seat" / "release my seat") | Section 3.7 only asks the assistant to *answer* queries about seats/projects — performing the allocation itself is new |
-| **Company logo / branded UI** | Not specified — the brief only asks for "simple responsive UI" (Section 4) |
+| **Company logo / branded UI, incl. a subtle background watermark** | Not specified — the brief only asks for "simple responsive UI" (Section 4) |
 | **Distinctive visual design system** (ink/paper/signage-amber palette, custom type pairing) | Not specified |
+| **Password visibility toggle and a "Forgot password?" affordance on login** | Not specified |
 
 Everything else in this project — the data model, all required endpoints, the seed data minimums,
 the read-only AI query types, and the dashboard — maps directly to a numbered section of the brief
@@ -405,6 +520,10 @@ and is documented against that section in Prompts 1–8 above.
 - JWT auth model (roles, dependencies, endpoint protection) and the login/role-gating UI
 - Ownership-scoped self-service booking/release, and the AI assistant's deterministic write-intent
   layer that resolves identity from the JWT rather than free text
+- Diagnostic approach on the frontend hosting saga: once repeated re-checks of platform UI state
+  stopped being productive, switched to reproducing the exact production build locally and
+  inspecting the compiled bytes directly — which is what actually found both the real fix points
+  (Prompt 12)
 
 **Needed correction:**
 - Missing `email-validator` dependency for Pydantic's `EmailStr` (backend startup crash)
@@ -424,6 +543,14 @@ and is documented against that section in Prompts 1–8 above.
 - Railway's public Postgres proxy reliably hung mid-seed for reasons outside the application code;
   resolved by moving the database to Render rather than continuing to chase a platform-specific
   networking issue
+- `frontend/src/auth.jsx`'s login call was hardcoded to `/api/auth/login` from before
+  `VITE_API_URL` existed as a concept in the project, and never got updated when `api.js` gained
+  the dynamic `BASE` logic — the single largest source of debugging time in the whole project,
+  because every symptom pointed at hosting-platform/environment-variable configuration when the
+  actual bug was one un-migrated line of application code (Prompt 12)
+- A duplicated `import { useAuth }` line appeared in a manually-edited copy of `App.jsx` during the
+  UI polish round; caught before pushing by handing back the complete verified file rather than
+  another partial patch
 
 **How correctness was verified throughout:**
 - Every endpoint was exercised with real `curl` requests against a running server, not just read
